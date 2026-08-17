@@ -8,16 +8,65 @@ Everything below reproduces from a clean checkout — data is included.
 
 ## Data (`data/`)
 
-| file | columns | span | rows |
-|---|---|---|---|
-| `ndx_cache.csv` | daily close | 2010-01-04 … 2026-08-17 | 4180 |
-| `overnight_path2.parquet` | entry, hi, lo, bars | 2014-11-11 … 2026-07-31 | 2891 |
-| `overnight_pct.parquet` | MNQ_ret, MNQ_close, MES_ret, MES_close | 2014-11-11 … 2026-08-03 | 2898 |
+Three files, one row per trading night, aligned on the entry date. The strategy
+holds Nasdaq-100 futures overnight — **enter at 16:00 ET** (the US cash close),
+**exit at 09:00 ET** the next morning (30 min before the 09:30 open).
 
-One row per night. `entry` is the 16:00 ET print; `hi`/`lo` are the extremes over
-the hold to 09:00 ET the next morning; `*_ret` is the close-to-close overnight
-return. Levels are continuous-front-month; the drawdown/notional figures use the
-current MNQ contract ($2/point).
+| file | span | rows |
+|---|---|---|
+| `ndx_cache.csv` | 2010-01-04 … 2026-08-17 | 4180 |
+| `overnight_path2.parquet` | 2014-11-11 … 2026-07-31 | 2891 |
+| `overnight_pct.parquet` | 2014-11-11 … 2026-08-03 | 2898 |
+
+### Where it comes from
+
+- **`ndx_cache.csv`** — Nasdaq-100 **index** (^NDX) daily close, from Yahoo
+  Finance (`yfinance`). Used only to build the trend gate (price vs its own
+  200-day moving average, lagged one day). The index is used here because the
+  live signal reads a freely available series; returns below are on the futures.
+- **`overnight_path2.parquet` / `overnight_pct.parquet`** — derived from
+  **NQ front-month futures 1-minute bars** (E-mini Nasdaq-100; MNQ is the
+  1/10-size micro, same price, $2/point). Bars come from a retail futures feed
+  (NinjaTrader historical export). For each night the front contract is the one
+  with that day's highest volume; the values are aggregated over the
+  16:00→09:00 ET hold. These are **derived per-night aggregates**, not a raw
+  tick/quote feed.
+
+### Columns
+
+`overnight_path2.parquet`
+
+| column | meaning | unit |
+|---|---|---|
+| `entry` | front-month price at 16:00 ET (entry) | index points |
+| `hi` | highest print during the hold | index points |
+| `lo` | lowest print during the hold | index points |
+| `bars` | 1-minute bars in the window (median 945 — the 16:00→09:00 span minus the 17:00–18:00 ET maintenance halt) | count |
+
+`overnight_pct.parquet`
+
+| column | meaning | unit |
+|---|---|---|
+| `MNQ_ret` | overnight return, 16:00 close → 09:00 exit | fraction |
+| `MNQ_close` | entry price — identical to `path2.entry` | index points |
+| `MES_ret`, `MES_close` | same construction for the S&P 500 E-mini (MES) | — |
+
+`MES_*` are carried for reference (an NQ-vs-ES comparison) and are **not used**
+by `premium.py` or `account.py` — those read only the MNQ columns.
+
+### How the path is used
+
+- **Return** is `MNQ_ret` (close-to-close overnight P&L).
+- The **+100pt take-profit** is decided from the path: it counts as filled
+  whenever `hi/entry − 1` reaches the target during the night; otherwise the
+  night is marked to the close. This is the only place an intra-night high
+  enters the P&L.
+- `lo` backs the drawdown / loss-limit reasoning (how far a night dipped before
+  it recovered by the close).
+
+Dollar figures convert returns at a fixed **$59,000 notional per contract**
+($2/point × the current NQ level), so notional growth over 2014–2026 does not
+distort the drawdown numbers.
 
 ## Run
 
